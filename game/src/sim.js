@@ -29,7 +29,7 @@
 // tile for 4s. Boss-wave enemies always drop Lumen (all kills drop here).
 
 import { TICK, ECONOMY, TOWER_COSTS, EVO_COST_MUL, ABILITY, SCORING, STARTING_LUMEN } from './config.js';
-import { GRID_RADIUS, hexKey, hexDistance, buildPath } from './hex.js';
+import { GRID_RADIUS, hexKey, hexDistance, buildPath, buildPaths } from './hex.js';
 import { computeLit, isLit } from './light.js';
 import { awardLumen, spendLumen, tickEconomy } from './economy.js';
 import { getDifficulty } from './difficulty.js';
@@ -52,6 +52,9 @@ const BURN_DPS = 10; // Heliotrope burn damage per second (burn lasts 4s)
 
 export function createSim(difficultyId = 'radiant') {
   const difficulty = getDifficulty(difficultyId);
+  // Two invasion lanes (v2): `paths` holds both, `path` stays an alias
+  // of paths.A so the boss, shots and render keep working through it.
+  const paths = buildPaths();
   return {
     tick: 0,
     time: 0,
@@ -79,7 +82,8 @@ export function createSim(difficultyId = 'radiant') {
     // internals (not part of the render contract)
     spawnQueue: [],
     waveTime: 0,
-    path: buildPath(),
+    paths,
+    path: paths.A,
     burnTiles: [],
     darknessUntil: 0,
     nextId: 1,
@@ -116,7 +120,9 @@ function tileLit(state, q, r) {
 }
 
 function onPath(state, q, r) {
-  return state.path.some((t) => t.q === q && t.r === r);
+  // No tower or pylon may be built on EITHER invasion lane.
+  const lanes = state.paths ? [state.paths.A, state.paths.B] : [state.path];
+  return lanes.some((lane) => lane && lane.some((t) => t.q === q && t.r === r));
 }
 
 function occupied(state, q, r) {
@@ -453,7 +459,7 @@ export function startWave(state) {
   state.spawnQueue = [];
   for (const g of def.spawns) {
     for (let i = 0; i < g.count; i++) {
-      state.spawnQueue.push({ role: g.role, at: g.delay + i * (g.interval || 0.8) });
+      state.spawnQueue.push({ role: g.role, at: g.delay + i * (g.interval || 0.8), pathId: g.path || 'A' });
     }
   }
   state.spawnQueue.sort((a, b) => a.at - b.at);
@@ -463,7 +469,7 @@ export function startWave(state) {
   return { ok: true, wave: state.wave };
 }
 
-function spawnEnemy(state, role) {
+function spawnEnemy(state, role, pathId = 'A') {
   // createEnemy(role, wave, difficultyId): wave scales HP +7%/wave
   // (enemies.js), difficulty id selects the multiplier curve.
   const enemy = createEnemy(role, state.wave, state.difficulty.id) || {};
@@ -476,8 +482,12 @@ function spawnEnemy(state, role) {
   );
   enemy.hp = enemy.maxHp;
   enemy.speed = (enemy.speed ?? base.speed ?? 1) * (state.difficulty.speedMul ?? 1);
-  enemy.q = state.path[0].q;
-  enemy.r = state.path[0].r;
+  // Spawn at the head of the enemy's OWN lane (boss P2/P4 summons call
+  // without a pathId and default to lane A).
+  const lane = (state.paths && state.paths[pathId]) || state.path;
+  enemy.pathId = pathId;
+  enemy.q = lane[0].q;
+  enemy.r = lane[0].r;
   enemy.pathIndex = 0;
   enemy.slowUntil = 0;
   enemy.revealedUntil = 0;
@@ -537,7 +547,14 @@ function targetsInRange(state, tower, stats) {
   if (state.boss && !bossImmune(state) && hexDistance(tower, state.boss) <= (stats.range ?? 0)) {
     list.push(state.boss);
   }
-  list.sort((a, b) => b.pathIndex - a.pathIndex);
+  // Rank by PROGRESS FRACTION along the target's own lane, so a B enemy
+  // at index 7 (at the Core) and an A enemy at index 5 (at the Core)
+  // rank equal. The boss walks lane A (state.path is the A alias).
+  const progress = (e) => {
+    const lane = (state.paths && state.paths[e.pathId]) || state.path;
+    return e.pathIndex / Math.max(1, lane.length - 1);
+  };
+  list.sort((a, b) => progress(b) - progress(a));
   return list;
 }
 
@@ -717,7 +734,7 @@ export function stepSim(state, input = {}, dt = TICK) {
   while (state.spawnQueue.length && state.spawnQueue[0].at <= state.waveTime) {
     const s = state.spawnQueue.shift();
     if (s.role === 'boss') spawnBoss(state);
-    else spawnEnemy(state, s.role);
+    else spawnEnemy(state, s.role, s.pathId || 'A');
   }
 
   towerFire(state, dt);
@@ -751,6 +768,7 @@ export function stepSim(state, input = {}, dt = TICK) {
   // t=0 and pylons undefined, silently disabling all three).
   const ctx = {
     path: state.path,
+    paths: state.paths,
     now,
     time: now,
     speedMul: state.difficulty.speedMul ?? 1,
@@ -770,8 +788,10 @@ export function stepSim(state, input = {}, dt = TICK) {
         ev(state, 'pylon-destroyed', { q: pylon.q, r: pylon.r });
       }
     }
-    // Leak: reached the Core tile (or enemyTick reported it).
-    if (result === 'leak' || enemy.pathIndex >= state.path.length - 1) {
+    // Leak: reached the Core tile (or enemyTick reported it). The Core
+    // is the last tile of the enemy's OWN lane (B is 8 tiles, A is 6).
+    const enemyLane = (state.paths && state.paths[enemy.pathId]) || state.path;
+    if (result === 'leak' || enemy.pathIndex >= enemyLane.length - 1) {
       const idx = state.enemies.indexOf(enemy);
       if (idx >= 0) state.enemies.splice(idx, 1);
       const dmg = LEAK_DAMAGE[enemy.role] ?? 1;

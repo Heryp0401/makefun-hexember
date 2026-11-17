@@ -10,15 +10,15 @@
 // renderShot reports window.__hexemberShotRenderer = 'error'.
 
 import { computeLit } from './light.js';
-import { buildPath } from './hex.js';
+import { buildPath, buildPaths } from './hex.js';
 
 export const SHOT_WIDTH = 1280;
 export const SHOT_HEIGHT = 720;
 
 export const SHOT_SCENES = {
   title: { label: 'Title', wave: 0, desc: 'Island lit, no enemies, difficulty select visible (Ember/Radiant/Eclipse/Awakening + "!" badge).' },
-  play: { label: 'Play', wave: 5, desc: 'Wave 5 mid-action, 6 towers placed, enemies mid-path, towers firing, HUD visible.' },
-  boss: { label: 'Boss', wave: 10, desc: 'Wave 10, Eclipse Sovereign at 60% HP with health bar, HUD visible.' },
+  play: { label: 'Play', wave: 5, desc: 'Wave 5 mid-action, 8 towers placed, enemies on both lanes, Flare active, towers firing, HUD visible.' },
+  boss: { label: 'Boss', wave: 10, desc: 'Wave 10, Eclipse Sovereign at 60% HP on lane A with 4 escorts on the B flank, HUD visible.' },
   victory: { label: 'Victory', wave: 10, desc: 'Victory screen, 3 stars, grade S, top 5 table with seeded sample entries.' },
 };
 
@@ -32,21 +32,26 @@ export function mulberry32(seed) {
   };
 }
 
-// The REAL invasion path (hex.js/sim.js): straight line spawn -> Core.
+// The REAL invasion paths (hex.js/sim.js): A straight line spawn -> Core,
+// B the long flank that forks at the second tile and rejoins at (0,1).
 const PATH = buildPath();
+const PATHS = buildPaths();
 const PYLONS = [
   { id: 'pylon-1', q: 3, r: 1, lit: true, hp: 3 },
   { id: 'pylon-2', q: 3, r: -1, lit: true, hp: 3 },
-  { id: 'pylon-3', q: 2, r: 2, lit: true, hp: 3 },
+  { id: 'pylon-3', q: 0, r: 3, lit: true, hp: 3 },
 ];
-// Towers on lit tiles next to the path (real types + real evo ids).
+// Towers on lit tiles next to the paths (real types + real evo ids).
+// All 8 sit off BOTH lanes; t1/t2/t3/t7 stand within range of B-lane tiles.
 const PLAY_TOWERS = [
-  { id: 't1', type: 'prism', evo: 'arcConductor', q: 4, r: 1 },
+  { id: 't1', type: 'prism', evo: 'arcConductor', q: 2, r: 3 },
   { id: 't2', type: 'heliotrope', evo: null, q: 2, r: 1 },
   { id: 't3', type: 'lance', evo: null, q: 1, r: 1 },
   { id: 't4', type: 'mortar', evo: 'seismicCore', q: 2, r: -1 },
   { id: 't5', type: 'prism', evo: null, q: 1, r: -1 },
   { id: 't6', type: 'pylonSuar', evo: 'amplifierNode', q: 4, r: -1 },
+  { id: 't7', type: 'lance', evo: 'zenithRailgun', q: 1, r: 3 },
+  { id: 't8', type: 'prism', evo: 'gatlingSpire', q: 3, r: -2 },
 ];
 const ENEMY_ROLES = ['skitterer', 'stalker', 'snuffer', 'brute'];
 const RUN_NAMES = ['Astra', 'Bima', 'Citra', 'Dewi', 'Elang', 'Fajar', 'Gita', 'Hana'];
@@ -100,7 +105,7 @@ export function buildShotState(scene, seed = 1) {
     boss: null, boons: [], boonChoices: [],
     flare: { activeUntil: 0, q: 0, r: 0, radius: 2, cooldownUntil: 0 },
     overcharge: { cooldownUntil: 0 },
-    burnTiles: [], darknessUntil: 0, path: PATH,
+    burnTiles: [], darknessUntil: 0, path: PATH, paths: PATHS,
     events: [], stars: 0, grade: null, bestRuns: [], bestScore: 0,
     stats: { wave: 0, wavesReached: 0, kills: 0, enemiesKilled: 0, lumen: 0, lumenCollected: 0, towers: 0, towersBuilt: 0, timeSec: 0, playTimeSeconds: 0 },
   };
@@ -111,47 +116,58 @@ export function buildShotState(scene, seed = 1) {
   }
   if (s === 'play') {
     const enemies = [];
-    for (let i = 0; i < 8; i++) {
-      // Spread along the whole path (spawn -> Core) so the invasion
-      // reads at a glance instead of clustering under the towers.
-      const pathIndex = i % 5;
-      const at = PATH[pathIndex];
+    // 14 enemies, 7 per lane, spread along each lane so both invasions
+    // read at a glance (A has 6 tiles, B has 8 — one A tile repeats).
+    const A_SPREAD = [0, 1, 2, 3, 4, 5, 3];
+    const B_SPREAD = [0, 1, 2, 3, 4, 5, 6];
+    for (let i = 0; i < 7; i++) {
       const hp = 60 + Math.floor(rng() * 40);
+      const aAt = PATH[A_SPREAD[i]];
       enemies.push({
-        id: `enemy-${i}`, role: ENEMY_ROLES[i % ENEMY_ROLES.length],
-        q: at.q, r: at.r, pathIndex, hp, maxHp: 100,
+        id: `enemy-a${i}`, role: ENEMY_ROLES[i % ENEMY_ROLES.length],
+        q: aAt.q, r: aAt.r, pathIndex: A_SPREAD[i], pathId: 'A', hp, maxHp: 100,
+      });
+      const bAt = PATHS.B[B_SPREAD[i]];
+      enemies.push({
+        id: `enemy-b${i}`, role: ENEMY_ROLES[(i + 2) % ENEMY_ROLES.length],
+        q: bAt.q, r: bAt.r, pathIndex: B_SPREAD[i], pathId: 'B', hp, maxHp: 100,
       });
     }
     const towers = PLAY_TOWERS.map((t) => ({ ...t, cooldown: 0, beamTo: null }));
-    // Three towers visibly firing beams at the nearest enemies.
-    towers[1].beamTo = { q: enemies[0].q, r: enemies[0].r };
-    towers[2].beamTo = { q: enemies[1].q, r: enemies[1].r };
-    towers[0].beamTo = { q: enemies[2].q, r: enemies[2].r };
+    // Four towers visibly firing beams at enemies on both lanes.
+    towers[0].beamTo = { q: enemies[1].q, r: enemies[1].r }; // B lane
+    towers[1].beamTo = { q: enemies[0].q, r: enemies[0].r }; // A lane
+    towers[2].beamTo = { q: enemies[3].q, r: enemies[3].r }; // B lane
+    towers[3].beamTo = { q: enemies[2].q, r: enemies[2].r }; // A lane
     return withLit({
       ...base, phase: 'wave', wave: 5, lumen: 340, coreHP: 8, coreHp: 8,
-      score: 12450, kills: 87, towersBuilt: 6, lumenCollected: 1180,
+      score: 12450, kills: 87, towersBuilt: 8, lumenCollected: 1180,
       towers, enemies,
-      stats: { wave: 5, wavesReached: 5, kills: 87, enemiesKilled: 87, lumen: 1180, lumenCollected: 1180, towers: 6, towersBuilt: 6, timeSec: 312, playTimeSeconds: 312 },
+      // Flare ACTIVE over the B flank: visible radius + lit B-lane tiles.
+      flare: { activeUntil: 4, q: 3, r: 2, radius: 2, cooldownUntil: 0 },
+      stats: { wave: 5, wavesReached: 5, kills: 87, enemiesKilled: 87, lumen: 1180, lumenCollected: 1180, towers: 8, towersBuilt: 8, timeSec: 312, playTimeSeconds: 312 },
     });
   }
   if (s === 'boss') {
     const enemies = [];
     for (let i = 0; i < 4; i++) {
-      const at = PATH[1 + i];
+      // Escorts ride the B flank while the Sovereign takes lane A.
+      const at = PATHS.B[1 + i];
       enemies.push({
         id: `enemy-${i}`, role: ENEMY_ROLES[i % ENEMY_ROLES.length],
-        q: at.q, r: at.r, pathIndex: 1 + i, hp: 80, maxHp: 100,
+        q: at.q, r: at.r, pathIndex: 1 + i, pathId: 'B', hp: 80, maxHp: 100,
       });
     }
     const towers = PLAY_TOWERS.map((t) => ({ ...t, cooldown: 0, beamTo: null }));
     towers[1].beamTo = { q: 3, r: 0 }; // heliotrope beam on the boss
     towers[2].beamTo = { q: 3, r: 0 };
+    towers[0].beamTo = { q: enemies[0].q, r: enemies[0].r }; // prism beam on a B escort
     return withLit({
       ...base, phase: 'wave', wave: 10, lumen: 520, coreHP: 6, coreHp: 6,
-      score: 48200, kills: 243, towersBuilt: 6, lumenCollected: 2100,
+      score: 48200, kills: 243, towersBuilt: 8, lumenCollected: 2100,
       towers, enemies,
       boss: { id: 'boss', role: 'boss', name: 'Eclipse Sovereign', hp: 1800, maxHp: 3000, phase: 2, q: 3, r: 0, pathIndex: 2 },
-      stats: { wave: 10, wavesReached: 10, kills: 243, enemiesKilled: 243, lumen: 2100, lumenCollected: 2100, towers: 6, towersBuilt: 6, timeSec: 640, playTimeSeconds: 640 },
+      stats: { wave: 10, wavesReached: 10, kills: 243, enemiesKilled: 243, lumen: 2100, lumenCollected: 2100, towers: 8, towersBuilt: 8, timeSec: 640, playTimeSeconds: 640 },
     });
   }
   // victory

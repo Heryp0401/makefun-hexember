@@ -2,8 +2,10 @@
 // Roles: Skitterer (swarm), Umbra Stalker (cloaked), Snuffer (pylon saboteur),
 // Stone Brute (armored). Boss lives in boss.js.
 // State shape expected (owned by sim.js, builder A):
-//   state.time (seconds), state.path [{q,r}, spawn -> Core],
-//   state.pylons [{id,q,r,hp,lit}], state.enemies (for reference only).
+//   state.time (seconds), state.path [{q,r}, spawn -> Core] (lane A alias),
+//   state.paths {A: [...6 tiles], B: [...8 tiles]} (two lanes; each enemy
+//   walks its own lane via enemy.pathId), state.pylons [{id,q,r,hp,lit}],
+//   state.enemies (for reference only).
 //   Lit check, in order: state.isTileLit(q,r) fn, state.litTiles Set of "q,r",
 //   state.flareUntil/flareQ/flareR/flareRadius, state.burnTiles Set of "q,r"
 //   (Heliotrope burn lights its tile 4s — GDD gap closure #3).
@@ -61,6 +63,7 @@ export function createEnemy(role, wave = 1, difficulty = 'radiant', spawn = null
   const enemy = {
     id: `enemy-${role}-${_nextId++}`,
     role, wave: w, difficulty,
+    pathId: 'A', // invasion lane: 'A' (main) or 'B' (flank); the sim sets it at spawn
     hp, maxHp: hp,
     baseHp: base.hp, baseSpeed: base.speed,
     q: spawn ? spawn.q : 0, r: spawn ? spawn.r : 0,
@@ -75,11 +78,21 @@ export function createEnemy(role, wave = 1, difficulty = 'radiant', spawn = null
   return enemy;
 }
 
-function nearestPathIndex(state, q, r) {
-  if (!state.path || !state.path.length) return 0;
+// The lane an enemy walks: its own pathId ('A' | 'B'), falling back to
+// the single v1 path when the state carries no paths map.
+export function pathFor(state, enemy) {
+  if (!state) return [];
+  return (state.paths && state.paths[enemy.pathId]) || state.path || [];
+}
+
+// Nearest tile of the ENEMY'S OWN lane (a Snuffer that diverted from B
+// rejoins B, never A).
+function nearestPathIndex(state, enemy, q, r) {
+  const path = pathFor(state, enemy);
+  if (!path.length) return 0;
   let best = 0, bestD = Infinity;
-  for (let i = 0; i < state.path.length; i++) {
-    const d = hexDistance(q, r, state.path[i].q, state.path[i].r);
+  for (let i = 0; i < path.length; i++) {
+    const d = hexDistance(q, r, path[i].q, path[i].r);
     if (d < bestD) { bestD = d; best = i; }
   }
   return best;
@@ -128,7 +141,7 @@ export function enemyTick(enemy, state, dt) {
   if (dt <= 0) return events;
   if (t < enemy.stunUntil) return events; // stunned (e.g. Solar Flare): no move, no attack
 
-  const path = (state && state.path) || [];
+  const path = pathFor(state, enemy);
   if (!path.length) return events;
 
   // --- Snuffer saboteur logic ---
@@ -147,7 +160,7 @@ export function enemyTick(enemy, state, dt) {
         // Target gone/dark: rejoin the path at the nearest path tile.
         enemy.mode = 'path';
         enemy.targetPylon = null;
-        enemy.pathIndex = nearestPathIndex(state, enemy.q, enemy.r);
+        enemy.pathIndex = nearestPathIndex(state, enemy, enemy.q, enemy.r);
         enemy.q = path[enemy.pathIndex].q;
         enemy.r = path[enemy.pathIndex].r;
         enemy.moveAcc = 0;
@@ -169,7 +182,7 @@ export function enemyTick(enemy, state, dt) {
             target.lit = false;
             enemy.mode = 'path';
             enemy.targetPylon = null;
-            enemy.pathIndex = nearestPathIndex(state, enemy.q, enemy.r);
+            enemy.pathIndex = nearestPathIndex(state, enemy, enemy.q, enemy.r);
             enemy.moveAcc = 0;
           }
         }

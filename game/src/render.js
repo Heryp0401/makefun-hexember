@@ -75,6 +75,48 @@ export function createRenderer(canvas) {
   // Light-network lines between lit pylons and the Core.
   const netMat = new THREE.LineBasicMaterial({ color: GOLD, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
   let netLines = null, netKey = '';
+  // Invasion-lane highlight (v2): flat discs + hex outlines on BOTH lanes
+  // so the fork reads at a glance — lane A gold, lane B deep ember, the
+  // shared spawn (fork) tile brighter. Follows state.paths, never a
+  // hardcoded list; rebuilt only when the paths change (keyed like the
+  // light-network lines above), so shot renders stay deterministic.
+  let pathGroup = null, pathKey = '';
+  function syncPathHighlight(state) {
+    const paths = state.paths || (state.path ? { A: state.path } : null);
+    const key = paths ? JSON.stringify([paths.A, paths.B]) : '';
+    if (key === pathKey) return;
+    pathKey = key;
+    if (pathGroup) { overlayGroup.remove(pathGroup); pathGroup = null; }
+    if (!paths) return;
+    pathGroup = new THREE.Group();
+    const lanes = [
+      { tiles: paths.A || [], disc: 0xffb703, discOp: 0.10, line: 0xffd166, lineOp: 0.35 },
+      { tiles: paths.B || [], disc: 0xff6d00, discOp: 0.14, line: 0xff7b00, lineOp: 0.5 },
+    ];
+    for (const lane of lanes) {
+      for (const t of lane.tiles) {
+        const p = modelHexToWorld(t.q, t.r);
+        const disc = makeDisc(0.85, lane.disc, lane.discOp);
+        disc.position.set(p.x, 0.035, p.z);
+        pathGroup.add(disc);
+        const outline = makeHexOutline(lane.line, lane.lineOp);
+        outline.position.set(p.x, 0.03, p.z);
+        pathGroup.add(outline);
+      }
+    }
+    // Fork tile (shared spawn): brighter disc + bright outline.
+    const fork = (paths.A && paths.A[0]) || null;
+    if (fork) {
+      const p = modelHexToWorld(fork.q, fork.r);
+      const disc = makeDisc(0.95, 0xffe066, 0.3);
+      disc.position.set(p.x, 0.04, p.z);
+      pathGroup.add(disc);
+      const outline = makeHexOutline(0xfff3c4, 0.9);
+      outline.position.set(p.x, 0.03, p.z);
+      pathGroup.add(outline);
+    }
+    overlayGroup.add(pathGroup);
+  }
   // Reason label sprite (redrawn only when the reason text changes).
   const labelCanvas = document.createElement('canvas');
   labelCanvas.width = 256; labelCanvas.height = 64;
@@ -372,6 +414,7 @@ export function createRenderer(canvas) {
     syncTowers(state.towers);
     syncEnemies(state.enemies, dt);
     const litPylons = syncPylons(state.pylons);
+    syncPathHighlight(state);
 
     // Boss.
     if (state.boss) {
@@ -403,6 +446,9 @@ export function createRenderer(canvas) {
       flareT = Math.min(1, flareT + dt * 1.4);
       const R = 1 + flareT * 9;
       flareRing.visible = true;
+      // The ring expands from the tile the Flare was cast on (not the Core).
+      const fp = modelHexToWorld(flare.q || 0, flare.r || 0);
+      flareRing.position.set(fp.x, 0.04, fp.z);
       flareRing.scale.setScalar(R);
       flareRing.material.opacity = 0.9 * (1 - flareT);
       coreLight.intensity = 120;
