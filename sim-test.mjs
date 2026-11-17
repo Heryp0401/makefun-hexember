@@ -7,7 +7,9 @@
 
 import { createSim, stepSim, startWave, placeTower, placePylon, evolveTower, useFlare, useOvercharge, chooseBoon } from './game/src/sim.js';
 import { buildWave, WAVE_COUNT, BOSS_WAVE, BOON_WAVES } from './game/src/waves.js';
-import { hexDistance, buildPath, hexNeighbors } from './game/src/hex.js';
+import { hexDistance, buildPath, buildPaths, hexNeighbors } from './game/src/hex.js';
+import { buildShotState } from './game/src/shots.js';
+import { createEnemy, enemyTick, pathFor } from './game/src/enemies.js';
 import { computeLit, isLit } from './game/src/light.js';
 import { awardLumen, spendLumen } from './game/src/economy.js';
 import { getDifficulty, DIFFICULTY_IDS } from './game/src/difficulty.js';
@@ -30,8 +32,10 @@ function check(name, cond, detail = '') {
 }
 
 const PATH = buildPath();
-const onPath = (q, r) => PATH.some((t) => t.q === q && t.r === r);
-const minDistToPath = (q, r) => Math.min(...PATH.map((t) => hexDistance({ q, r }, t)));
+const PATHS = buildPaths();
+// A tile is on-path if it belongs to EITHER invasion lane.
+const onPath = (q, r) => PATHS.A.some((t) => t.q === q && t.r === r) || PATHS.B.some((t) => t.q === q && t.r === r);
+const minDistToPath = (q, r) => Math.min(...PATHS.A.map((t) => hexDistance({ q, r }, t)), ...PATHS.B.map((t) => hexDistance({ q, r }, t)));
 const distToCore = (q, r) => hexDistance({ q, r }, { q: 0, r: 0 });
 
 // All buildable tiles, best first: closest to the path, then to the Core.
@@ -48,10 +52,13 @@ function candidateTiles() {
   return tiles;
 }
 
-// Pylon spots that extend light along the path (checked in this order).
+// Pylon spots that extend light along the paths (checked in this order).
+// v2: all spots sit OFF both lanes — (4,1), (2,2) and (1,2) are B-lane
+// tiles now. B-flank light comes from (3,1), (2,1), (1,1), (2,3),
+// (1,3) and (0,3), each adjacent to B tiles.
 const PYLON_SPOTS = [
-  { q: 3, r: 1 }, { q: 3, r: -1 }, { q: 4, r: 1 }, { q: 4, r: -1 },
-  { q: 2, r: 2 }, { q: 2, r: -2 }, { q: 1, r: 2 }, { q: 1, r: -2 },
+  { q: 3, r: 1 }, { q: 3, r: -1 }, { q: 2, r: 1 }, { q: 2, r: -1 },
+  { q: 1, r: 1 }, { q: 1, r: -1 }, { q: 2, r: 3 }, { q: 1, r: 3 },
   { q: 0, r: 3 }, { q: 0, r: -3 },
 ];
 const TOWER_ROTATION = ['lance', 'prism', 'mortar', 'heliotrope', 'pylonSuar', 'prism', 'lance', 'mortar', 'prism', 'heliotrope', 'lance'];
@@ -115,6 +122,16 @@ check('wave 4 has snuffers', buildWave(4, 'radiant').spawns.some((s) => s.role =
 check('wave 6 has brutes', buildWave(6, 'radiant').spawns.some((s) => s.role === 'brute'));
 check('wave 10 has the boss', buildWave(10, 'radiant').spawns.some((s) => s.role === 'boss'));
 check('WAVE_COUNT 10 / BOSS_WAVE 10 / BOON_WAVES 3,6,9', WAVE_COUNT === 10 && BOSS_WAVE === 10 && JSON.stringify(BOON_WAVES) === '[3,6,9]');
+// --- v2: two invasion lanes ---
+check('paths: A 6 tiles + B 8 tiles, shared spawn (5,0) + Core (0,0)', PATHS.A.length === 6 && PATHS.B.length === 8 && PATHS.A[0].q === 5 && PATHS.A[0].r === 0 && PATHS.B[0].q === 5 && PATHS.B[0].r === 0 && PATHS.A[5].q === 0 && PATHS.A[5].r === 0 && PATHS.B[7].q === 0 && PATHS.B[7].r === 0);
+check('path B tiles in-grid and adjacent chain', PATHS.B.every((t, i) => hexDistance(t, { q: 0, r: 0 }) <= 5 && (i === 0 || hexDistance(t, PATHS.B[i - 1]) === 1)));
+check('wave 1: every group on A', buildWave(1, 'radiant').spawns.every((s) => s.path === 'A'));
+check('wave 3: stalker on B, skitterer on A', buildWave(3, 'radiant').spawns.find((s) => s.role === 'stalker')?.path === 'B' && buildWave(3, 'radiant').spawns.find((s) => s.role === 'skitterer')?.path === 'A');
+check('wave 5: skitterer splits A 7 + B 7, B delayed +0.5s', (() => { const g = buildWave(5, 'radiant').spawns.filter((s) => s.role === 'skitterer'); return g.length === 2 && g[0].path === 'A' && g[0].count === 7 && g[1].path === 'B' && g[1].count === 7 && g[1].delay === g[0].delay + 0.5; })());
+check('wave 6: brute on B, snuffer on A', buildWave(6, 'radiant').spawns.find((s) => s.role === 'brute')?.path === 'B' && buildWave(6, 'radiant').spawns.find((s) => s.role === 'snuffer')?.path === 'A');
+check('wave 10: boss on A', buildWave(10, 'radiant').spawns.find((s) => s.role === 'boss')?.path === 'A');
+check('total spawn counts unchanged per wave', [6, 8, 12, 17, 21, 26, 30, 35, 39, 45].every((tot, i) => buildWave(i + 1, 'radiant').spawns.reduce((a, g) => a + g.count, 0) === tot));
+check('no PYLON_SPOT sits on either path', PYLON_SPOTS.every((s) => !onPath(s.q, s.r)));
 check('4 difficulty ids', JSON.stringify(DIFFICULTY_IDS) === JSON.stringify(['ember', 'radiant', 'eclipse', 'awakening']));
 check('awakening has bossPhase4, ember coreHP 12', getDifficulty('awakening').bossPhase4 === true && getDifficulty('ember').coreMaxHP === 12);
 check('unknown difficulty falls back to radiant', getDifficulty('nope').id === 'radiant');
@@ -166,6 +183,41 @@ check('placeTower rejects unknown type', placeTower(sim, 'deathray', 1, 1).ok ==
   check('useOvercharge ok on a tower', useOvercharge(sim, sim.towers[0].id).ok === true);
   check('chooseBoon rejects outside boon phase', chooseBoon(sim, 'glassSupernova').ok === false);
 }
+{
+  // Snuffer on B diverts to a nearby lit Pylon and rejoins ITS OWN lane.
+  const ctx = {
+    path: PATHS.A, paths: PATHS, time: 0,
+    pylons: [{ id: 'p1', q: 2, r: 1, hp: 3, lit: true }],
+    towers: [], state: null,
+  };
+  const sn = createEnemy('snuffer', 4, 'radiant');
+  sn.pathId = 'B'; sn.q = 3; sn.r = 2; sn.pathIndex = 2; // standing on B tile (3,2)
+  check('pathFor resolves the enemy lane (B)', pathFor(ctx, sn) === PATHS.B);
+  let diverted = false;
+  for (let i = 0; i < 10 && !diverted; i++) {
+    enemyTick(sn, ctx, 1 / 60);
+    if (sn.mode === 'attackPylon') diverted = true;
+  }
+  check('snuffer on B diverts to nearby lit pylon', diverted && sn.pathId === 'B', `mode=${sn.mode}`);
+  ctx.pylons[0].hp = 0; ctx.pylons[0].lit = false;
+  enemyTick(sn, ctx, 1 / 60);
+  const rejoinedOnB = PATHS.B.some((t) => t.q === sn.q && t.r === sn.r);
+  check('snuffer diverted from B rejoins B (not A)', sn.mode === 'path' && sn.pathId === 'B' && rejoinedOnB, `q=${sn.q} r=${sn.r} mode=${sn.mode} pathId=${sn.pathId}`);
+}
+{
+  // Shot scenes: no tower/pylon on either lane; play is dense on both lanes.
+  const noOnPath = (sc) => {
+    const st = buildShotState(sc, 1);
+    return [...st.towers, ...st.pylons].every((t) => !onPath(t.q, t.r));
+  };
+  check('shot scenes: no tower/pylon on either path (all 4 scenes)', ['title', 'play', 'boss', 'victory'].every(noOnPath));
+  const play = buildShotState('play', 1);
+  check('play shot: 14 enemies, 7 on A + 7 on B, 8 towers, Flare active', play.enemies.length === 14 && play.enemies.filter((e) => e.pathId === 'A').length === 7 && play.enemies.filter((e) => e.pathId === 'B').length === 7 && play.towers.length === 8 && play.flare.activeUntil > play.time, `enemies=${play.enemies.length} A=${play.enemies.filter((e) => e.pathId === 'A').length} B=${play.enemies.filter((e) => e.pathId === 'B').length} towers=${play.towers.length}`);
+  check('play shot: >= 4 beams visible', play.towers.filter((t) => t.beamTo).length >= 4, `beams=${play.towers.filter((t) => t.beamTo).length}`);
+  const boss = buildShotState('boss', 1);
+  check('boss shot: boss on A (3,0), 4 escorts on B', boss.boss.q === 3 && boss.boss.r === 0 && boss.enemies.length === 4 && boss.enemies.every((e) => e.pathId === 'B'));
+  check('boss shot: 8 towers, no tower/pylon on either path', boss.towers.length === 8 && [...boss.towers, ...boss.pylons].every((t) => !onPath(t.q, t.r)));
+}
 
 // ---------------------------------------------------------------- auto-play waves 1-10
 console.log('--- auto-play waves 1-10 ---');
@@ -175,6 +227,7 @@ let wavesCleared = 0;
 let boonsChosen = 0;
 let softLock = false;
 let steps = 0;
+let sawB = false; // a live enemy walked lane B at some point
 const MAX_STEPS_PER_WAVE = 60 * 300; // 5 sim-minutes per wave, then it is a soft-lock
 const MAX_TOTAL_STEPS = 60 * 60 * 30;
 
@@ -195,6 +248,7 @@ while (game.phase !== 'victory' && game.phase !== 'gameover' && steps < MAX_TOTA
       stepSim(game, {}, TICK);
       steps++;
       waveSteps++;
+      if (game.enemies.some((e) => e.pathId === 'B')) sawB = true;
       // Auto-player micro-actions, once per sim-second.
       if (game.tick % 60 === 0) {
         autoBuild(game);
@@ -222,6 +276,7 @@ check('enemies died (kills > 0)', game.kills > 0, `kills=${game.kills}`);
 check('Lumen flowed (collected > 0)', game.lumenCollected > 0, `collected=${game.lumenCollected}`);
 check('towers were built', game.towersBuilt > 0, `built=${game.towersBuilt}`);
 check('boon offered after waves 3/6/9 and chosen', boonsChosen === 3, `chosen=${boonsChosen}`);
+check('live: enemies spawned on lane B (waves >= 3)', sawB);
 check('score grew (kills + wave bonuses)', game.score > 0, `score=${game.score}`);
 if (game.phase === 'victory') {
   check('victory: stars 1-3 and grade set', game.stars >= 1 && game.stars <= 3 && ['S', 'A', 'B'].includes(game.grade), `stars=${game.stars} grade=${game.grade}`);

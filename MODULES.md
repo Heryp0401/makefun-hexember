@@ -5,11 +5,11 @@ Game code lives in `game/index.html` plus 23 ES modules under `game/src/`. Each 
 ## Core systems [A]
 
 - `game/src/config.js` — constants, tuning, difficulty multipliers, palette [A]
-- `game/src/hex.js` — hex grid math: axial coords, neighbors, distance, path [A]
+- `game/src/hex.js` — hex grid math: axial coords, neighbors, distance, two invasion paths A (6 tiles, main) + B (8 tiles, flank forking from shared spawn) [A]
 - `game/src/light.js` — light system: lit tiles, Pylon radius, brownout [A]
 - `game/src/economy.js` — Lumen: income, costs, Pylon drain, passive +2/s [A]
 - `game/src/sim.js` — pure game state + fixed timestep 1/60 step, NO three.js/DOM/audio imports [A]
-- `game/src/waves.js` — wave director: 10 waves, compositions, boss wave 10 [A]
+- `game/src/waves.js` — wave director: 10 waves, compositions, boss wave 10, deterministic per-group lane split (A/B, skitterer split w5+) [A]
 - `game/src/difficulty.js` — 4 difficulties Ember/Radiant/Eclipse/Awakening as multipliers + Awakening rules [A]
 - `game/src/ranking.js` — grade S/A/B/C + top 5 in localStorage [A]
 
@@ -17,7 +17,7 @@ Game code lives in `game/index.html` plus 23 ES modules under `game/src/`. Each 
 
 - `game/src/towers.js` — 5 tower types, stats, firing [B]
 - `game/src/evolutions.js` — 2 evolutions per tower = 10 forms [B]
-- `game/src/enemies.js` — 5 enemy roles, movement, counters [C]
+- `game/src/enemies.js` — 5 enemy roles, movement along own lane (pathFor/pathId, Snuffer rejoins own lane), counters [C]
 - `game/src/boss.js` — Eclipse Sovereign 3 phases + 4th Awakening phase [C]
 - `game/src/boons.js` — 3 boons with real trade-offs [C]
 - `game/src/abilities.js` — Solar Flare Q + Overcharge E, cooldowns [C]
@@ -37,7 +37,7 @@ Game code lives in `game/index.html` plus 23 ES modules under `game/src/`. Each 
 ## Audio & capture [F]
 
 - `game/src/audio.js` — WebAudio procedural SFX + music layers, mute [F]
-- `game/src/shots.js` — ?shot=&seed= deterministic scenes: title/play/boss/victory [F]
+- `game/src/shots.js` — ?shot=&seed= deterministic scenes: title/play/boss/victory; play dense on both lanes (14 enemies, 8 towers, Flare active), boss escorts on B [F]
 
 ## Glue [INTEGRATOR]
 

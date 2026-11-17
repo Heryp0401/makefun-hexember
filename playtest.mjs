@@ -26,9 +26,9 @@ const AUTO_BUILD_FN = `() => {
   const H = window.__hexember;
   const sim = H.sim;
   const hexD = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
-  const PATH = [{q:5,r:0},{q:4,r:0},{q:3,r:0},{q:2,r:0},{q:1,r:0},{q:0,r:0}];
-  const onPath = (q, r) => PATH.some((t) => t.q === q && t.r === r);
-  const minDistToPath = (q, r) => Math.min(...PATH.map((t) => hexD({q,r}, t)));
+  const PATHS = { A: [{q:5,r:0},{q:4,r:0},{q:3,r:0},{q:2,r:0},{q:1,r:0},{q:0,r:0}], B: [{q:5,r:0},{q:4,r:1},{q:3,r:2},{q:2,r:2},{q:1,r:2},{q:0,r:2},{q:0,r:1},{q:0,r:0}] };
+  const onPath = (q, r) => PATHS.A.some((t) => t.q === q && t.r === r) || PATHS.B.some((t) => t.q === q && t.r === r);
+  const minDistToPath = (q, r) => Math.min(...PATHS.A.map((t) => hexD({q,r}, t)), ...PATHS.B.map((t) => hexD({q,r}, t)));
   const distToCore = (q, r) => hexD({q,r}, {q:0,r:0});
   const tiles = [];
   for (let q = -5; q <= 5; q++) {
@@ -36,7 +36,7 @@ const AUTO_BUILD_FN = `() => {
     for (let r = rMin; r <= rMax; r++) if (!onPath(q, r)) tiles.push({q, r});
   }
   tiles.sort((a, b) => minDistToPath(a.q, a.r) - minDistToPath(b.q, b.r) || distToCore(a.q, a.r) - distToCore(b.q, b.r));
-  const PYLON_SPOTS = [{q:3,r:1},{q:3,r:-1},{q:4,r:1},{q:4,r:-1},{q:2,r:2},{q:2,r:-2},{q:1,r:2},{q:1,r:-2},{q:0,r:3},{q:0,r:-3}];
+  const PYLON_SPOTS = [{q:3,r:1},{q:3,r:-1},{q:2,r:1},{q:2,r:-1},{q:1,r:1},{q:1,r:-1},{q:2,r:3},{q:1,r:3},{q:0,r:3},{q:0,r:-3}];
   const ROT = ['lance','prism','mortar','heliotrope','pylonSuar','prism','lance','mortar','prism','heliotrope','lance'];
   const EVO = { prism:'arcConductor', lance:'zenithRailgun', mortar:'seismicCore', heliotrope:'solarObelisk', pylonSuar:'amplifierNode' };
   const A = H.actions;
@@ -134,10 +134,16 @@ try {
   let lastSt = null;
   let bossHpSamples = []; // {t, hp, litPylons, phase} — P1 immunity check
   let softLock = false;
+  let wave5Shot = false; // wave-5 render check: both lanes visible, enemies on each
   while (Date.now() - t0 < TIMEOUT_MS) {
     const st = await page.evaluate(READ_STATE);
     if (!st) { await page.waitForTimeout(500); continue; }
     lastSt = st;
+    if (st.phase === 'wave' && st.wave === 5 && !wave5Shot) {
+      wave5Shot = true;
+      await page.screenshot({ path: 'playtest-wave5.png' });
+      console.log('  wave-5 screenshot saved: playtest-wave5.png');
+    }
     if (st.phase !== lastPhase || st.wave !== lastWave) {
       console.log(`  [${Math.round((Date.now() - t0) / 1000)}s] phase=${st.phase} wave=${st.wave} coreHP=${st.coreHP}/${st.coreMaxHP} kills=${st.kills} lumen=${st.lumen} towers=${st.towers} pylons=${st.pylons} score=${st.score}`);
       lastPhase = st.phase; lastWave = st.wave; lastPhaseChange = Date.now();
@@ -185,6 +191,7 @@ try {
     result.time = lastSt.time; result.bossEvents = lastSt.bossEvents;
   }
   result.softLock = softLock;
+  result.wave5Shot = wave5Shot;
   result.consoleErrors = errors;
   // Boss-fight forensics from the sampled HP trace.
   const p1 = bossHpSamples.filter((s) => s.phase === 1 && s.lit < 3);
